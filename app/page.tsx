@@ -81,7 +81,8 @@ export default function Home() {
       console.log("websocket opened");
     }
     websocket.onerror = (err) => {
-      console.error();
+      console.error(err);
+      console.log({ backend: process.env.NEXT_PUBLIC_BACKEND_URL })
     }
     websocket.onmessage = (event) => {
       const data: GameMessage = JSON.parse(event.data);
