@@ -1,103 +1,186 @@
-import Image from "next/image";
+"use client"
 
+import { useEffect, useRef, useState } from "react";
+import { Application, Graphics } from "pixi.js";
+type GameMessage = {
+  id: number,
+  entry_fee: number,
+  players: Player[],
+  dots: Dot[],
+}
+type Player = {
+  username: string,
+  x: number,
+  y: number,
+  radius: number
+}
+type Dot = {
+  username: string,
+  x: number,
+  y: number,
+  radius: number,
+}
+let gameData: GameMessage;
+let mouseCoords: [number, number] = [0, 0];
 export default function Home() {
-  return (
-    <div className="grid grid-rows-[20px_1fr_20px] items-center justify-items-center min-h-screen p-8 pb-20 gap-16 sm:p-20 font-[family-name:var(--font-geist-sans)]">
-      <main className="flex flex-col gap-[32px] row-start-2 items-center sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={180}
-          height={38}
-          priority
-        />
-        <ol className="list-inside list-decimal text-sm/6 text-center sm:text-left font-[family-name:var(--font-geist-mono)]">
-          <li className="mb-2 tracking-[-.01em]">
-            Get started by editing{" "}
-            <code className="bg-black/[.05] dark:bg-white/[.06] px-1 py-0.5 rounded font-[family-name:var(--font-geist-mono)] font-semibold">
-              app/page.tsx
-            </code>
-            .
-          </li>
-          <li className="tracking-[-.01em]">
-            Save and see your changes instantly.
-          </li>
-        </ol>
+  const containerRef = useRef<HTMLDivElement>(null);
+  const appRef = useRef<Application | null>(null);
+  const playerRef = useRef<Player | null>(null);
+  const websocketRef = useRef<WebSocket | null>(null);
+  const [username, setUsername] = useState<string>("");
+  const [connected, setConnected] = useState<boolean>(false);
+  useEffect(() => {
+    const app = new Application();
+    appRef.current = app;
+    let handler: any;
+    (async () => {
+      await app.init({
+        width: 500,
+        height: 500,
+        backgroundColor: 0xffffff,
+      });
 
-        <div className="flex gap-4 items-center flex-col sm:flex-row">
-          <a
-            className="rounded-full border border-solid border-transparent transition-colors flex items-center justify-center bg-foreground text-background gap-2 hover:bg-[#383838] dark:hover:bg-[#ccc] font-medium text-sm sm:text-base h-10 sm:h-12 px-4 sm:px-5 sm:w-auto"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={20}
-              height={20}
-            />
-            Deploy now
-          </a>
-          <a
-            className="rounded-full border border-solid border-black/[.08] dark:border-white/[.145] transition-colors flex items-center justify-center hover:bg-[#f2f2f2] dark:hover:bg-[#1a1a1a] hover:border-transparent font-medium text-sm sm:text-base h-10 sm:h-12 px-4 sm:px-5 w-full sm:w-auto md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Read our docs
-          </a>
+      if (containerRef.current) {
+        containerRef.current.appendChild(app.canvas);
+      }
+      app.canvas.addEventListener("pointermove", (e) => {
+        const rect = app.canvas.getBoundingClientRect();
+        const mouseX = e.clientX - rect.left;
+        const mouseY = e.clientY - rect.top;
+
+        // Relative to player-centered screen
+        const centerX = app.screen.width / 2;
+        const centerY = app.screen.height / 2;
+
+        const relativeX = mouseX - centerX;
+        const relativeY = mouseY - centerY;
+        mouseCoords = [relativeX, relativeY];
+      });
+      animate();
+      handler = setInterval(emit, 1000 / 30);
+    })();
+    return () => {
+      app.destroy(true, { children: true });
+      clearInterval(handler);
+    };
+  }, []);
+  const emit = () => {
+    if (websocketRef.current && websocketRef.current.readyState === WebSocket.OPEN) {
+      const message = {
+        vx: Math.floor(-mouseCoords[0] / 10), // example velocity
+        vy: Math.floor(-mouseCoords[1] / 10),
+      };
+      websocketRef.current.send(JSON.stringify(message));
+    }
+  }
+  const open = () => {
+    if (!username) return;
+    const websocket = new WebSocket(`${process.env.NEXT_PUBLIC_BACKEND_URL}/ws?username=${username}`)
+    websocket.onopen = () => {
+      setConnected(true);
+      console.log("websocket opened");
+    }
+    websocket.onerror = (err) => {
+      console.error();
+    }
+    websocket.onmessage = (event) => {
+      const data: GameMessage = JSON.parse(event.data);
+      gameData = data;
+      playerRef.current = data.players.find(player => player.username === username) || null;
+    }
+    websocketRef.current = websocket;
+  }
+  const animate = async () => {
+    if (!appRef.current) return;
+    const app = appRef.current;
+    requestAnimationFrame(animate);
+
+    if (!gameData || !playerRef.current) return; // Ensure gameData and player are available
+
+    // Clear previous frame
+    app.stage.removeChildren();
+
+    const player = playerRef.current;
+    const centerX = app.canvas.width / 2;
+    const centerY = app.canvas.height / 2;
+    const gridSpacing = 100;
+    const worldSize = 1000;
+    const gridGraphics = new Graphics();
+    gridGraphics.setStrokeStyle({ width: 1, color: 0xaaaaaa, alpha: 1 });
+    gridGraphics.beginPath();
+    const offsetX = (Math.floor(player.x) % gridSpacing) - gridSpacing;
+    const offsetY = (Math.floor(player.y) % gridSpacing) - gridSpacing;
+    const playerY = 1000 - player.y;
+    const playerX = 1000 - player.x;
+
+    const yBorderTop = Math.max(app.screen.height / 2 - playerY, 0);
+    const xBorderLeft = Math.max(app.screen.width / 2 - playerX, 0);
+    const yBorderBottom = Math.min(app.screen.height / 2 + (worldSize - playerY), app.screen.height);
+    const xBorderRight = Math.min(app.screen.width / 2 + (worldSize - playerX), app.screen.width);
+    for (let x = Math.floor(offsetX); x < app.screen.width; x += gridSpacing) {
+      if (x < xBorderLeft || x > xBorderRight) {
+        continue;
+      }
+      gridGraphics.moveTo(x, yBorderTop);
+      gridGraphics.lineTo(x, yBorderBottom);
+    }
+    for (let y = Math.floor(offsetY); y < app.screen.height; y += gridSpacing) {
+      if (y < yBorderTop || y > yBorderBottom) {
+        continue;
+      }
+      gridGraphics.moveTo(xBorderLeft, y);
+      gridGraphics.lineTo(xBorderRight, y);
+    }
+    gridGraphics.stroke(); // finalize the path
+    app.stage.addChild(gridGraphics);
+    const playerGraphics = new Graphics();
+    playerGraphics.beginFill(0x00ff00); // Green color
+    playerGraphics.drawCircle(centerX, centerY, player.radius);
+    playerGraphics.endFill();
+    app.stage.addChild(playerGraphics);
+
+    // Draw dots relative to the player
+    gameData.dots.forEach((dot) => {
+      const dotGraphics = new Graphics();
+      const dotX = centerX - (dot.x - player.x); // Adjust dot position relative to player
+      const dotY = centerY - (dot.y - player.y); // Adjust dot position relative to player
+
+      dotGraphics.beginFill(0xff0000); // Red color for dots
+      dotGraphics.drawCircle(dotX, dotY, dot.radius);
+      dotGraphics.endFill();
+      app.stage.addChild(dotGraphics);
+    });
+
+    // Draw other players relative to the player
+    gameData.players.forEach((otherPlayer) => {
+      if (otherPlayer.username === player.username) return; // Skip current player
+
+      const otherPlayerGraphics = new Graphics();
+      const otherPlayerX = centerX - (otherPlayer.x - player.x); // Adjust other player position relative to player
+      const otherPlayerY = centerY - (otherPlayer.y - player.y); // Adjust other player position relative to player
+
+      otherPlayerGraphics.beginFill(0x0000ff); // Blue color for other players
+      otherPlayerGraphics.drawCircle(otherPlayerX, otherPlayerY, otherPlayer.radius);
+      otherPlayerGraphics.endFill();
+      app.stage.addChild(otherPlayerGraphics);
+    });
+  };
+  return (
+    <div ref={containerRef} className="relative w-[100vw] h-[100vh]">
+      {!connected && (
+        <div className="absolute z-50 top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 p-10 border-black border-2 bg-slate-500 rounded-lg flex flex-col justify-center items-center gap-2">
+          <p className="text-xl text-white font-bold">Wagr Minigames: Agar</p>
+          <input
+            type="text"
+            className="px-4 py-2 bg-blue-500 text-white rounded focus:outline-none focus:ring-2 focus:ring-blue-600 transition"
+            onChange={(event: any) => setUsername(event.target.value)}
+            placeholder="username"
+          />
+          <button className="px-4 py-2 bg-blue-500 text-white rounded hover:bg-blue-600 transition" onClick={open}>
+            Connect
+          </button>
         </div>
-      </main>
-      <footer className="row-start-3 flex gap-[24px] flex-wrap items-center justify-center">
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/file.svg"
-            alt="File icon"
-            width={16}
-            height={16}
-          />
-          Learn
-        </a>
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/window.svg"
-            alt="Window icon"
-            width={16}
-            height={16}
-          />
-          Examples
-        </a>
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://nextjs.org?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/globe.svg"
-            alt="Globe icon"
-            width={16}
-            height={16}
-          />
-          Go to nextjs.org →
-        </a>
-      </footer>
+      )}
     </div>
   );
 }
