@@ -74,7 +74,10 @@ export default function Home() {
     }
   }
   const open = () => {
-    if (!username) return;
+    if (!username) {
+      throw new Error("Username not provided");
+    }
+    console.log("here");
     const websocket = new WebSocket(`${process.env.NEXT_PUBLIC_BACKEND_URL}/ws?username=${username}`)
     websocket.onopen = () => {
       setConnected(true);
