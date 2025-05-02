@@ -1,12 +1,18 @@
 "use client"
 
 import { useEffect, useRef, useState } from "react";
-import { Application, Graphics } from "pixi.js";
+import { Application, Graphics, TextStyle, Text } from "pixi.js";
 type GameMessage = {
   id: number,
   entry_fee: number,
   players: Player[],
   dots: Dot[],
+  virus: Virus[],
+}
+type Virus = {
+  x: number,
+  y: number,
+  radius: number
 }
 type Player = {
   username: string,
@@ -19,6 +25,7 @@ type Dot = {
   x: number,
   y: number,
   radius: number,
+  emitter?: string,
 }
 let gameData: GameMessage;
 let mouseCoords: [number, number] = [0, 0];
@@ -35,9 +42,8 @@ export default function Home() {
     let handler: any;
     (async () => {
       await app.init({
-        width: 500,
-        height: 500,
         backgroundColor: 0xffffff,
+        resizeTo: window
       });
 
       if (containerRef.current) {
@@ -103,8 +109,20 @@ export default function Home() {
 
     // Clear previous frame
     app.stage.removeChildren();
-
     const player = playerRef.current;
+    const sw = app.screen.width;
+    const sh = app.screen.height;
+    const screenCenterX = sw / 2;
+    const screenCenterY = sh / 2;
+
+    // ── 1) compute a scale so that the player's radius never exceeds 30% of screen ──
+    const maxOnScreenRadius = Math.min(sw, sh) * 0.3;
+    const scaleFactor = Math.min(1, maxOnScreenRadius / player.radius);
+
+    // ── 2) pivot & position stage at screen center, then scale ──
+    app.stage.pivot.set(screenCenterX, screenCenterY);
+    app.stage.position.set(screenCenterX, screenCenterY);
+    app.stage.scale.set(scaleFactor);
     const centerX = app.canvas.width / 2;
     const centerY = app.canvas.height / 2;
     const gridSpacing = 100;
@@ -121,19 +139,27 @@ export default function Home() {
     const xBorderLeft = Math.max(app.screen.width / 2 - playerX, 0);
     const yBorderBottom = Math.min(app.screen.height / 2 + (worldSize - playerY), app.screen.height);
     const xBorderRight = Math.min(app.screen.width / 2 + (worldSize - playerX), app.screen.width);
-    for (let x = Math.floor(offsetX); x < app.screen.width; x += gridSpacing) {
-      if (x < xBorderLeft || x > xBorderRight) {
-        continue;
-      }
-      gridGraphics.moveTo(x, yBorderTop);
-      gridGraphics.lineTo(x, yBorderBottom);
+    for (let rawX = Math.floor(offsetX); rawX < app.screen.width; rawX += gridSpacing) {
+      if (rawX < xBorderLeft || rawX > xBorderRight) continue;
+
+      // snap to pixel grid
+      const x = Math.round(rawX) + 0.5;
+      const y0 = Math.round(yBorderTop) + 0.5;
+      const y1 = Math.round(yBorderBottom) + 0.5;
+
+      gridGraphics.moveTo(x, y0);
+      gridGraphics.lineTo(x, y1);
     }
-    for (let y = Math.floor(offsetY); y < app.screen.height; y += gridSpacing) {
-      if (y < yBorderTop || y > yBorderBottom) {
-        continue;
-      }
-      gridGraphics.moveTo(xBorderLeft, y);
-      gridGraphics.lineTo(xBorderRight, y);
+
+    for (let rawY = Math.floor(offsetY); rawY < app.screen.height; rawY += gridSpacing) {
+      if (rawY < yBorderTop || rawY > yBorderBottom) continue;
+
+      const y = Math.round(rawY) + 0.5;
+      const x0 = Math.round(xBorderLeft) + 0.5;
+      const x1 = Math.round(xBorderRight) + 0.5;
+
+      gridGraphics.moveTo(x0, y);
+      gridGraphics.lineTo(x1, y);
     }
     gridGraphics.stroke(); // finalize the path
     app.stage.addChild(gridGraphics);
@@ -142,31 +168,67 @@ export default function Home() {
     playerGraphics.drawCircle(centerX, centerY, player.radius);
     playerGraphics.endFill();
     app.stage.addChild(playerGraphics);
-
+    const style = new TextStyle({ fill: '#000000', fontSize: 14, align: 'center' });
+    const mainLabel = new Text(player.username, style);
+    mainLabel.x = centerX - mainLabel.width / 2;
+    mainLabel.y = centerY + player.radius + 4;
+    app.stage.addChild(mainLabel);
     // Draw dots relative to the player
+
     gameData.dots.forEach((dot) => {
       const dotGraphics = new Graphics();
-      const dotX = centerX - (dot.x - player.x); // Adjust dot position relative to player
-      const dotY = centerY - (dot.y - player.y); // Adjust dot position relative to player
+      const dotX = centerX - (dot.x - player.x);
+      const dotY = centerY - (dot.y - player.y);
+      // pick color based on emitter
+      const fillColor = dot.emitter === player.username ? 0x888888 : 0xff0000;
 
-      dotGraphics.beginFill(0xff0000); // Red color for dots
+      dotGraphics.beginFill(fillColor);
       dotGraphics.drawCircle(dotX, dotY, dot.radius);
       dotGraphics.endFill();
+
       app.stage.addChild(dotGraphics);
     });
+    gameData.virus.forEach((v) => {
+      const tri = new Graphics();
+      const vx = centerX - (v.x - player.x);
+      const vy = centerY - (v.y - player.y);
+      const r = v.radius;
+
+      // compute the three corners of an equilateral triangle
+      const height = Math.sqrt(3) * r;
+      const points = [
+        vx, vy - (2 / 3) * height,         // top point
+        vx - r, vy + (1 / 3) * height,         // bottom-left
+        vx + r, vy + (1 / 3) * height          // bottom-right
+      ];
+
+      tri.beginFill(0x00aa00);
+      tri.drawPolygon(points);
+      tri.endFill();
+
+      app.stage.addChild(tri);
+    });
+
 
     // Draw other players relative to the player
-    gameData.players.forEach((otherPlayer) => {
-      if (otherPlayer.username === player.username) return; // Skip current player
+    gameData.players.forEach((other) => {
+      if (other.username === player.username) return; // skip self
 
-      const otherPlayerGraphics = new Graphics();
-      const otherPlayerX = centerX - (otherPlayer.x - player.x); // Adjust other player position relative to player
-      const otherPlayerY = centerY - (otherPlayer.y - player.y); // Adjust other player position relative to player
+      const otherX = centerX - (other.x - player.x);
+      const otherY = centerY - (other.y - player.y);
 
-      otherPlayerGraphics.beginFill(0x0000ff); // Blue color for other players
-      otherPlayerGraphics.drawCircle(otherPlayerX, otherPlayerY, otherPlayer.radius);
-      otherPlayerGraphics.endFill();
-      app.stage.addChild(otherPlayerGraphics);
+      // circle
+      const g = new Graphics();
+      g.beginFill(0x000000);
+      g.drawCircle(otherX, otherY, other.radius);
+      g.endFill();
+      app.stage.addChild(g);
+
+      // name label
+      const label = new Text(other.username, style);
+      label.x = otherX - label.width / 2;
+      label.y = otherY + other.radius + 4;
+      app.stage.addChild(label);
     });
   };
   return (
